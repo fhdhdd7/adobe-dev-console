@@ -17,13 +17,17 @@ Depending on the API or an Event to your project on the Adobe Developer Console,
 
 ### Credential Name
 
-An admin in your organization can manage all OAuth Server-to-Server credentials by visiting the [Adobe Admin Console](https://adminconsole.adobe.com) > Users > API credentials. To find the correct API credential easily on the Admin Console, you can provide your OAuth Server-to-Server credential a name during credential setup.
+When you set up an OAuth Server-to-Server credential in the [Adobe Developer Console](https://developer.adobe.com/console), you can give it a name.
 
 ![](../../../images/oauth-server-to-server-credential-name.png)
 
-This name can be modified later in your project by visiting the OAuth Server-to-Server credential overview page.
+This name can be modified later in your project by visiting the OAuth Server-to-Server credential overview page in the Developer Console.
 
 ![](../../../images/oauth-server-to-server-credential-name-update.png)
+
+An admin in your organization can manage all OAuth Server-to-Server credentials by visiting the [Adobe Admin Console](https://adminconsole.adobe.com) (a separate portal from the Developer Console) under Users > API credentials. The name you set in the Developer Console is also shown in this list, so naming your credential makes it easier for an admin to find the correct one among all the API credentials in your organization.
+
+![](../../../images/oauth-server-to-server-credential-admin-console-name.png)
 
 ### Selecting Product Profiles
 
