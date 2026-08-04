@@ -136,10 +136,6 @@ The following samples demonstrate basic interaction with the Adobe OAuth endpoin
 - **Python Example**  
   [Github repo](https://github.com/AdobeDocs/adobe-dev-console/tree/main/samples/adobe-auth-python) where you can find a complete Python based web app example that uses Adobe OAuth.
 
-## OAuth 2.0 Playground
-
-The OAuth 2.0 playground allows you to test out the 3-legged OAuth flow and obtain access tokens for experimentation. Learn more about the playground [here](../Tools/o-auth-playground.md).
-
 ## Further Reading
 
 There are several great resources to get more familiar with the OAuth2.0 framework - 

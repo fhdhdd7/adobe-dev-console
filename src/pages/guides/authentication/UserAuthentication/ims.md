@@ -416,4 +416,4 @@ Scopes for Experience Cloud user authentication based APIs
 
 APIs | Scopes
 ---|---
-Adobe Analytics | ```openid, AdobeID, read_organizations, additional_info.projectedProductContext, additional_info.job_function```
+Adobe Analytics | `openid, AdobeID, read_organizations, additional_info.projectedProductContext, additional_info.job_function`
