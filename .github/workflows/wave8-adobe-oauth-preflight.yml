@@ -1,4 +1,4 @@
-name: Wave 8 External Adobe OAuth Bridge Probe
+name: Wave 8 Browser Transport Inspection
 
 on:
   push:
@@ -8,73 +8,31 @@ on:
 permissions:
   contents: read
 
-concurrency:
-  group: wave8-external-adobe-oauth-bridge-probe
-  cancel-in-progress: false
-
 jobs:
-  external-bridge-probe:
-    name: External auth-only bridge probe
+  inspect-browser-transport:
+    name: Inspect AppDeploy browser transport
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
-      - name: Probe AppDeploy proxy host with app Host routing
+      - name: Inspect public frontend assets for API transport
         shell: bash
         run: |
           set -euo pipefail
-          proxy='https://proxy-v2.appdeploy.ai'
-          app_host='wave-8-adobe-oauth-bridge-x52n4k.v2.appdeploy.ai'
-          response="$(mktemp)"
-          headers="$(mktemp)"
-          trap 'rm -f "$response" "$headers"' EXIT
+          base='https://wave-8-adobe-oauth-bridge-x52n4k.v2.appdeploy.ai'
+          html="$(mktemp)"
+          trap 'rm -f "$html"' EXIT
+          curl --fail --silent --show-error --location "$base/" -o "$html"
+          echo 'WAVE8_ROOT=200'
+          echo 'WAVE8_SCRIPT_ASSETS_BEGIN'
+          grep -oE '<script[^>]+src="[^"]+"' "$html" | sed -E 's/.*src="([^"]+)"/\1/' | sort -u || true
+          echo 'WAVE8_SCRIPT_ASSETS_END'
 
-          health_http="$({ curl --silent --show-error \
-            --header "Host: $app_host" \
-            --output /dev/null \
-            --write-out '%{http_code}' \
-            "$proxy/api/_healthcheck"; } || true)"
-          echo "WAVE8_PROXYHOST_HEALTH_HTTP=${health_http}"
-
-          http_status="$({ curl --silent --show-error \
-            --header "Host: $app_host" \
-            --header 'Content-Type: application/json' \
-            --dump-header "$headers" \
-            --output "$response" \
-            --write-out '%{http_code}' \
-            --request POST \
-            --data '{}' \
-            "$proxy/api/adobe/probe"; } || true)"
-
-          echo "WAVE8_PROXYHOST_PROBE_HTTP=${http_status}"
-          grep -iE '^(content-type|server|www-authenticate|x-appdeploy[^:]*):' "$headers" | sed 's/^/WAVE8_HEADER /' || true
-
-          if [[ "$http_status" != "200" ]]; then
-            echo "WAVE8_BRIDGE_RESULT=PROXY_HOST_HTTP_FAILURE"
-            exit 1
-          fi
-
-          if ! jq -e 'type == "object" and (.state | type == "string")' "$response" >/dev/null 2>&1; then
-            echo "WAVE8_BRIDGE_RESULT=BRIDGE_RESPONSE_INVALID"
-            exit 1
-          fi
-
-          state="$(jq -r '.state' "$response")"
-          echo "WAVE8_BRIDGE_STATE=${state}"
-
-          if [[ "$state" == "OAUTH_VERIFIED" ]]; then
-            profile="$(jq -r '.profile // "unknown"' "$response")"
-            adobe_http="$(jq -r '.httpStatus // "unknown"' "$response")"
-            expires="$(jq -r '.expiresIn // "unknown"' "$response")"
-            echo "WAVE8_OAUTH_VERIFIED profile=${profile} http=${adobe_http} expiresIn=${expires}"
-            echo "WAVE8_ACCESS_TOKEN=OBTAINED_BUT_NOT_EXPOSED"
-            exit 0
-          fi
-
-          if [[ "$state" == "OAUTH_REJECTED" ]]; then
-            echo "WAVE8_OAUTH_REJECTED"
-            jq -r '.attempts[]? | "WAVE8_ATTEMPT profile=\(.profile // "unknown") http=\(.httpStatus // "unknown") error=\(.providerError // "unknown")"' "$response"
-            exit 1
-          fi
-
-          echo "WAVE8_BRIDGE_RESULT=NON_VERIFIED_STATE"
-          exit 1
+          mapfile -t assets < <(grep -oE '<script[^>]+src="[^"]+"' "$html" | sed -E 's/.*src="([^"]+)"/\1/' | sort -u)
+          for asset in "${assets[@]}"; do
+            if [[ "$asset" == http* ]]; then url="$asset"; else url="$base/${asset#./}"; fi
+            js="$(mktemp)"
+            curl --fail --silent --show-error --location "$url" -o "$js"
+            echo "WAVE8_ASSET=${asset}"
+            grep -oE 'https://[A-Za-z0-9._/-]*appdeploy[A-Za-z0-9._/?=&%-]*|/[A-Za-z0-9._-]*(__appdeploy|appdeploy|api)[A-Za-z0-9._/?=&%-]*|x-[Aa]pp[Dd]eploy-[A-Za-z0-9_-]+|__appdeploy[A-Za-z0-9_./?=&%-]*' "$js" | sort -u | head -n 80 || true
+            rm -f "$js"
+          done
