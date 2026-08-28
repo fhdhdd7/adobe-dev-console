@@ -1,83 +1,24 @@
-name: Wave 8 Adobe OAuth Preflight
+name: Wave 8 External Adobe OAuth Bridge Probe
 
 on:
   push:
     branches:
       - wave8-adobe-github-oauth-preflight
-  workflow_dispatch:
 
 permissions:
   contents: read
 
 concurrency:
-  group: wave8-adobe-oauth-preflight
+  group: wave8-external-adobe-oauth-bridge-probe
   cancel-in-progress: false
 
 jobs:
-  adobe-oauth-preflight:
-    name: Adobe OAuth Server-to-Server preflight
+  external-bridge-probe:
+    name: External auth-only bridge probe
     runs-on: ubuntu-latest
-    timeout-minutes: 10
-    env:
-      LEGACY_REFERENCE_SHA: edab1751948d0661b26d33c2bd77b629e03df9c9
-      ADOBE_CLIENT_ID: ${{ secrets.ADOBE_CLIENT_ID }}
-      ADOBE_CLIENT_SECRET: ${{ secrets.ADOBE_CLIENT_SECRET }}
-      ADOBE_SCOPES: ${{ secrets.ADOBE_SCOPES }}
-      ADOBE_ORG_ID: ${{ secrets.ADOBE_ORG_ID }}
-      ADOBE_CREDENTIAL_ID: ${{ secrets.ADOBE_CREDENTIAL_ID }}
-
+    timeout-minutes: 5
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-
-      - name: Verify provenance boundary
-        id: provenance
-        shell: bash
-        run: |
-          set -euo pipefail
-          echo "head_sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
-          if git cat-file -e "${LEGACY_REFERENCE_SHA}^{commit}" 2>/dev/null; then
-            echo "reference_status=RESOLVED" >> "$GITHUB_OUTPUT"
-            echo "### Provenance" >> "$GITHUB_STEP_SUMMARY"
-            echo "- Legacy reference: RESOLVED" >> "$GITHUB_STEP_SUMMARY"
-          else
-            echo "reference_status=UNRESOLVED" >> "$GITHUB_OUTPUT"
-            echo "### Provenance" >> "$GITHUB_STEP_SUMMARY"
-            echo "- Legacy reference: UNRESOLVED in this repository history" >> "$GITHUB_STEP_SUMMARY"
-          fi
-          echo "- Runner HEAD: \`$(git rev-parse HEAD)\`" >> "$GITHUB_STEP_SUMMARY"
-          echo "- Repository role: DIAGNOSTIC_HARNESS_ONLY (this repository is an AdobeDocs documentation fork, not an App Builder deployment target)" >> "$GITHUB_STEP_SUMMARY"
-
-      - name: Validate Adobe OAuth secret contract
-        id: contract
-        shell: bash
-        run: |
-          set -euo pipefail
-          missing=()
-          for name in ADOBE_CLIENT_ID ADOBE_CLIENT_SECRET ADOBE_SCOPES; do
-            if [[ -z "${!name:-}" ]]; then
-              missing+=("$name")
-            fi
-          done
-
-          if (( ${#missing[@]} > 0 )); then
-            printf 'missing=%s\n' "$(IFS=,; echo "${missing[*]}")" >> "$GITHUB_OUTPUT"
-            echo "status=BLOCKED_MISSING_SECRETS" >> "$GITHUB_OUTPUT"
-            echo "### OAuth credential contract" >> "$GITHUB_STEP_SUMMARY"
-            echo "- Status: BLOCKED_MISSING_SECRETS" >> "$GITHUB_STEP_SUMMARY"
-            echo "- Missing secret names: \`$(IFS=,; echo "${missing[*]}")\`" >> "$GITHUB_STEP_SUMMARY"
-          else
-            echo "missing=" >> "$GITHUB_OUTPUT"
-            echo "status=READY_FOR_TOKEN_PROBE" >> "$GITHUB_OUTPUT"
-            echo "### OAuth credential contract" >> "$GITHUB_STEP_SUMMARY"
-            echo "- Status: READY_FOR_TOKEN_PROBE" >> "$GITHUB_STEP_SUMMARY"
-          fi
-
-      - name: Probe Adobe IMS token endpoint
-        id: token
-        if: steps.contract.outputs.status == 'READY_FOR_TOKEN_PROBE'
+      - name: Probe sanitized AppDeploy bridge result
         shell: bash
         run: |
           set -euo pipefail
@@ -87,64 +28,44 @@ jobs:
           http_status="$({ curl --silent --show-error \
             --output "$response_file" \
             --write-out '%{http_code}' \
-            --request POST 'https://ims-na1.adobelogin.com/ims/token/v3' \
-            --header 'Content-Type: application/x-www-form-urlencoded' \
-            --data-urlencode 'grant_type=client_credentials' \
-            --data-urlencode "client_id=${ADOBE_CLIENT_ID}" \
-            --data-urlencode "client_secret=${ADOBE_CLIENT_SECRET}" \
-            --data-urlencode "scope=${ADOBE_SCOPES}"; } || true)"
+            --request POST \
+            --header 'Content-Type: application/json' \
+            --data '{}' \
+            'https://wave-8-adobe-oauth-bridge-x52n4k.v2.appdeploy.ai/api/adobe/probe'; } || true)"
 
-          if [[ "$http_status" == "200" ]] && jq -e '.access_token and .token_type and .expires_in' "$response_file" >/dev/null 2>&1; then
-            token_type="$(jq -r '.token_type' "$response_file")"
-            expires_in="$(jq -r '.expires_in' "$response_file")"
-            echo "status=OAUTH_VERIFIED" >> "$GITHUB_OUTPUT"
-            echo "### Adobe IMS token probe" >> "$GITHUB_STEP_SUMMARY"
-            echo "- Status: OAUTH_VERIFIED" >> "$GITHUB_STEP_SUMMARY"
-            echo "- HTTP: 200" >> "$GITHUB_STEP_SUMMARY"
-            echo "- Token type: \`${token_type}\`" >> "$GITHUB_STEP_SUMMARY"
-            echo "- expires_in: \`${expires_in}\` seconds" >> "$GITHUB_STEP_SUMMARY"
-          else
-            error_code="$(jq -r '.error // .error_code // "unknown_error"' "$response_file" 2>/dev/null || echo unknown_error)"
-            error_desc="$(jq -r '.error_description // .message // "No description returned"' "$response_file" 2>/dev/null || echo 'No description returned')"
-            error_desc="${error_desc:0:300}"
-            echo "status=OAUTH_REJECTED" >> "$GITHUB_OUTPUT"
-            echo "### Adobe IMS token probe" >> "$GITHUB_STEP_SUMMARY"
-            echo "- Status: OAUTH_REJECTED" >> "$GITHUB_STEP_SUMMARY"
-            echo "- HTTP: \`${http_status}\`" >> "$GITHUB_STEP_SUMMARY"
-            echo "- Error: \`${error_code}\`" >> "$GITHUB_STEP_SUMMARY"
-            echo "- Description: ${error_desc}" >> "$GITHUB_STEP_SUMMARY"
+          echo "### Wave 8 external bridge probe" >> "$GITHUB_STEP_SUMMARY"
+          echo "- Harness role: PUBLIC_RUNNER_TRIGGER_ONLY" >> "$GITHUB_STEP_SUMMARY"
+          echo "- Bridge HTTP: \`${http_status}\`" >> "$GITHUB_STEP_SUMMARY"
+
+          if [[ "$http_status" != "200" ]]; then
+            echo "- Result: BRIDGE_HTTP_FAILURE" >> "$GITHUB_STEP_SUMMARY"
             exit 1
           fi
 
-      - name: Optional I/O Management metadata readiness
-        if: always()
-        shell: bash
-        run: |
-          set -euo pipefail
-          echo "### I/O Management metadata" >> "$GITHUB_STEP_SUMMARY"
-          if [[ -n "${ADOBE_ORG_ID:-}" && -n "${ADOBE_CREDENTIAL_ID:-}" ]]; then
-            echo "- Organization and credential identifiers: PRESENT" >> "$GITHUB_STEP_SUMMARY"
-          else
-            echo "- Organization and/or credential identifier: NOT CONFIGURED (optional for the IMS token probe)" >> "$GITHUB_STEP_SUMMARY"
-          fi
-
-      - name: Emit Wave 8 state
-        if: always()
-        shell: bash
-        run: |
-          set -euo pipefail
-          echo "### Wave 8 state" >> "$GITHUB_STEP_SUMMARY"
-          echo "- Runner: EXECUTED" >> "$GITHUB_STEP_SUMMARY"
-          echo "- Reference SHA: ${{ steps.provenance.outputs.reference_status || 'UNKNOWN' }}" >> "$GITHUB_STEP_SUMMARY"
-          echo "- Credential contract: ${{ steps.contract.outputs.status || 'UNKNOWN' }}" >> "$GITHUB_STEP_SUMMARY"
-          echo "- OAuth token probe: ${{ steps.token.outputs.status || 'NOT_RUN' }}" >> "$GITHUB_STEP_SUMMARY"
-
-      - name: Enforce OAuth verification gate
-        if: always()
-        shell: bash
-        run: |
-          set -euo pipefail
-          if [[ "${{ steps.token.outputs.status || 'NOT_RUN' }}" != "OAUTH_VERIFIED" ]]; then
-            echo "Wave 8 remains BLOCKED: Adobe OAuth has not been verified." >&2
+          if ! jq -e 'type == "object" and (.state | type == "string")' "$response_file" >/dev/null 2>&1; then
+            echo "- Result: BRIDGE_RESPONSE_INVALID" >> "$GITHUB_STEP_SUMMARY"
             exit 1
           fi
+
+          state="$(jq -r '.state' "$response_file")"
+          echo "- State: \`${state}\`" >> "$GITHUB_STEP_SUMMARY"
+
+          if [[ "$state" == "OAUTH_VERIFIED" ]]; then
+            profile="$(jq -r '.profile // "unknown"' "$response_file")"
+            adobe_http="$(jq -r '.httpStatus // "unknown"' "$response_file")"
+            expires="$(jq -r '.expiresIn // "unknown"' "$response_file")"
+            echo "- Profile: \`${profile}\`" >> "$GITHUB_STEP_SUMMARY"
+            echo "- Adobe IMS HTTP: \`${adobe_http}\`" >> "$GITHUB_STEP_SUMMARY"
+            echo "- expires_in: \`${expires}\` seconds" >> "$GITHUB_STEP_SUMMARY"
+            echo "- Access token: OBTAINED_BUT_NOT_EXPOSED" >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+
+          if [[ "$state" == "OAUTH_REJECTED" ]]; then
+            echo "- Attempts (sanitized):" >> "$GITHUB_STEP_SUMMARY"
+            jq -r '.attempts[]? | "  - profile=\(.profile // "unknown") http=\(.httpStatus // "unknown") error=\(.providerError // "unknown")"' "$response_file" >> "$GITHUB_STEP_SUMMARY"
+            exit 1
+          fi
+
+          echo "- Result: NON_VERIFIED_STATE" >> "$GITHUB_STEP_SUMMARY"
+          exit 1
