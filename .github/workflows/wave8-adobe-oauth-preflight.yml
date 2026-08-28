@@ -18,38 +18,38 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
-      - name: Probe AppDeploy stage proxy directly
+      - name: Probe AppDeploy proxy host with app Host routing
         shell: bash
         run: |
           set -euo pipefail
-          host='wave-8-adobe-oauth-bridge-x52n4k.v2.appdeploy.ai'
-          proxy_ip='18.232.7.146'
+          proxy='https://proxy-v2.appdeploy.ai'
+          app_host='wave-8-adobe-oauth-bridge-x52n4k.v2.appdeploy.ai'
           response="$(mktemp)"
           headers="$(mktemp)"
           trap 'rm -f "$response" "$headers"' EXIT
 
           health_http="$({ curl --silent --show-error \
-            --resolve "$host:443:$proxy_ip" \
+            --header "Host: $app_host" \
             --output /dev/null \
             --write-out '%{http_code}' \
-            "https://$host/api/_healthcheck"; } || true)"
-          echo "WAVE8_PROXY_HEALTH_HTTP=${health_http}"
+            "$proxy/api/_healthcheck"; } || true)"
+          echo "WAVE8_PROXYHOST_HEALTH_HTTP=${health_http}"
 
           http_status="$({ curl --silent --show-error \
-            --resolve "$host:443:$proxy_ip" \
+            --header "Host: $app_host" \
+            --header 'Content-Type: application/json' \
             --dump-header "$headers" \
             --output "$response" \
             --write-out '%{http_code}' \
             --request POST \
-            --header 'Content-Type: application/json' \
             --data '{}' \
-            "https://$host/api/adobe/probe"; } || true)"
+            "$proxy/api/adobe/probe"; } || true)"
 
-          echo "WAVE8_PROXY_PROBE_HTTP=${http_status}"
+          echo "WAVE8_PROXYHOST_PROBE_HTTP=${http_status}"
           grep -iE '^(content-type|server|www-authenticate|x-appdeploy[^:]*):' "$headers" | sed 's/^/WAVE8_HEADER /' || true
 
           if [[ "$http_status" != "200" ]]; then
-            echo "WAVE8_BRIDGE_RESULT=STAGE_PROXY_HTTP_FAILURE"
+            echo "WAVE8_BRIDGE_RESULT=PROXY_HOST_HTTP_FAILURE"
             exit 1
           fi
 
