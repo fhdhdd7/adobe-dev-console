@@ -1,4 +1,4 @@
-name: Wave 8 Internal Transport Context
+name: Wave 8 Adobe OAuth Internal Transport Probe
 
 on:
   push:
@@ -9,41 +9,69 @@ permissions:
   contents: read
 
 jobs:
-  inspect-internal-transport:
-    name: Inspect AppDeploy internal API client context
+  oauth-probe:
+    name: Adobe OAuth via AppDeploy internal transport
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
-      - name: Extract bounded transport context from live bundle
+      - name: Run sanitized auth-only probe
         shell: bash
         run: |
           set -euo pipefail
-          base='https://wave-8-adobe-oauth-bridge-x52n4k.v2.appdeploy.ai'
-          html="$(mktemp)"
-          js="$(mktemp)"
-          trap 'rm -f "$html" "$js"' EXIT
-          curl --fail --silent --show-error --location "$base/" -o "$html"
-          asset="$(grep -oE '<script[^>]+src="\./assets/index-[^"]+\.js"' "$html" | sed -E 's/.*src="([^"]+)"/\1/' | head -n1)"
-          curl --fail --silent --show-error --location "$base/${asset#./}" -o "$js"
-          python3 - "$js" <<'PY'
-          import sys,re
-          p=sys.argv[1]
-          s=open(p,'r',encoding='utf-8').read()
-          needles=['https://api-v2.appdeploy.ai/app/wave-8-adobe-oauth-bridge-x52n4k','x-appdeploy-keys-prefix','app-auth']
-          for needle in needles:
-              print('WAVE8_CONTEXT_START',needle)
-              start=0
-              count=0
-              while True:
-                  i=s.find(needle,start)
-                  if i<0 or count>=4: break
-                  a=max(0,i-900); b=min(len(s),i+len(needle)+1200)
-                  chunk=s[a:b].replace('\n',' ')
-                  # redact any long bearer/JWT-like strings defensively
-                  chunk=re.sub(r'(?i)(bearer\s+)[A-Za-z0-9._~-]{20,}',r'\1[REDACTED]',chunk)
-                  chunk=re.sub(r'eyJ[A-Za-z0-9._~-]{30,}','[JWT_REDACTED]',chunk)
-                  print(chunk)
-                  print('WAVE8_CONTEXT_BREAK')
-                  start=i+len(needle); count+=1
-              print('WAVE8_CONTEXT_END',needle)
-          PY
+          api='https://api-v2.appdeploy.ai/app/wave-8-adobe-oauth-bridge-x52n4k'
+          response="$(mktemp)"
+          headers="$(mktemp)"
+          trap 'rm -f "$response" "$headers"' EXIT
+
+          health_http="$({ curl --silent --show-error \
+            --output /dev/null \
+            --write-out '%{http_code}' \
+            "$api/api/_healthcheck"; } || true)"
+          echo "WAVE8_INTERNAL_HEALTH_HTTP=${health_http}"
+
+          http_status="$({ curl --silent --show-error \
+            --dump-header "$headers" \
+            --output "$response" \
+            --write-out '%{http_code}' \
+            --request POST \
+            --header 'Content-Type: application/json' \
+            --data '{}' \
+            "$api/api/adobe/probe"; } || true)"
+
+          echo "WAVE8_INTERNAL_PROBE_HTTP=${http_status}"
+          grep -iE '^(content-type|server|www-authenticate|x-appdeploy[^:]*):' "$headers" | sed 's/^/WAVE8_HEADER /' || true
+
+          if [[ "$http_status" != "200" ]]; then
+            echo "WAVE8_RESULT=INTERNAL_TRANSPORT_HTTP_FAILURE"
+            exit 1
+          fi
+
+          if ! jq -e 'type == "object" and (.state | type == "string")' "$response" >/dev/null 2>&1; then
+            echo "WAVE8_RESULT=INVALID_SANITIZED_RESPONSE"
+            head -c 200 "$response" | tr '\n' ' ' | sed 's/[^[:print:]]/?/g'
+            echo
+            exit 1
+          fi
+
+          state="$(jq -r '.state' "$response")"
+          echo "WAVE8_BRIDGE_STATE=${state}"
+
+          if [[ "$state" == "OAUTH_VERIFIED" ]]; then
+            profile="$(jq -r '.profile // "unknown"' "$response")"
+            adobe_http="$(jq -r '.httpStatus // "unknown"' "$response")"
+            token_type="$(jq -r '.tokenType // "unknown"' "$response")"
+            expires="$(jq -r '.expiresIn // "unknown"' "$response")"
+            echo "WAVE8_OAUTH_VERIFIED profile=${profile} http=${adobe_http} tokenType=${token_type} expiresIn=${expires}"
+            echo "WAVE8_ACCESS_TOKEN=OBTAINED_BUT_NOT_EXPOSED"
+            exit 0
+          fi
+
+          if [[ "$state" == "OAUTH_REJECTED" ]]; then
+            echo "WAVE8_OAUTH_REJECTED"
+            jq -r '.attempts[]? | "WAVE8_ATTEMPT profile=\(.profile // "unknown") http=\(.httpStatus // "unknown") error=\(.providerError // "unknown")"' "$response"
+            exit 1
+          fi
+
+          echo "WAVE8_RESULT=NON_VERIFIED_STATE"
+          jq -r 'keys | join(",")' "$response" | sed 's/^/WAVE8_RESPONSE_KEYS=/'
+          exit 1
