@@ -48,6 +48,7 @@ jobs:
             echo "- Legacy reference: UNRESOLVED in this repository history" >> "$GITHUB_STEP_SUMMARY"
           fi
           echo "- Runner HEAD: \`$(git rev-parse HEAD)\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "- Repository role: DIAGNOSTIC_HARNESS_ONLY (this repository is an AdobeDocs documentation fork, not an App Builder deployment target)" >> "$GITHUB_STEP_SUMMARY"
 
       - name: Validate Adobe OAuth secret contract
         id: contract
@@ -137,3 +138,13 @@ jobs:
           echo "- Reference SHA: ${{ steps.provenance.outputs.reference_status || 'UNKNOWN' }}" >> "$GITHUB_STEP_SUMMARY"
           echo "- Credential contract: ${{ steps.contract.outputs.status || 'UNKNOWN' }}" >> "$GITHUB_STEP_SUMMARY"
           echo "- OAuth token probe: ${{ steps.token.outputs.status || 'NOT_RUN' }}" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Enforce OAuth verification gate
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ "${{ steps.token.outputs.status || 'NOT_RUN' }}" != "OAUTH_VERIFIED" ]]; then
+            echo "Wave 8 remains BLOCKED: Adobe OAuth has not been verified." >&2
+            exit 1
+          fi
