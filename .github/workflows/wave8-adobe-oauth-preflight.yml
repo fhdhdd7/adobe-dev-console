@@ -18,62 +18,63 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
-      - name: Probe sanitized AppDeploy bridge result
+      - name: Probe bridge with browser-like same-origin context
         shell: bash
         run: |
           set -euo pipefail
-          response_file="$(mktemp)"
-          trap 'rm -f "$response_file"' EXIT
+          base='https://wave-8-adobe-oauth-bridge-x52n4k.v2.appdeploy.ai'
+          cookies="$(mktemp)"
+          response="$(mktemp)"
+          headers="$(mktemp)"
+          trap 'rm -f "$cookies" "$response" "$headers"' EXIT
+
+          root_http="$({ curl --silent --show-error --location --cookie-jar "$cookies" --output /dev/null --write-out '%{http_code}' "$base/"; } || true)"
+          echo "WAVE8_ROOT_HTTP=${root_http}"
 
           http_status="$({ curl --silent --show-error \
-            --output "$response_file" \
+            --cookie "$cookies" \
+            --dump-header "$headers" \
+            --output "$response" \
             --write-out '%{http_code}' \
             --request POST \
             --header 'Content-Type: application/json' \
+            --header "Origin: $base" \
+            --header "Referer: $base/" \
+            --header 'Sec-Fetch-Site: same-origin' \
+            --header 'Sec-Fetch-Mode: cors' \
+            --header 'Sec-Fetch-Dest: empty' \
             --data '{}' \
-            'https://wave-8-adobe-oauth-bridge-x52n4k.v2.appdeploy.ai/api/adobe/probe'; } || true)"
+            "$base/api/adobe/probe"; } || true)"
 
           echo "WAVE8_BRIDGE_HTTP=${http_status}"
-          echo "### Wave 8 external bridge probe" >> "$GITHUB_STEP_SUMMARY"
-          echo "- Harness role: PUBLIC_RUNNER_TRIGGER_ONLY" >> "$GITHUB_STEP_SUMMARY"
-          echo "- Bridge HTTP: \`${http_status}\`" >> "$GITHUB_STEP_SUMMARY"
+          grep -iE '^(content-type|server|www-authenticate|x-appdeploy[^:]*):' "$headers" | sed 's/^/WAVE8_HEADER /' || true
 
           if [[ "$http_status" != "200" ]]; then
             echo "WAVE8_BRIDGE_RESULT=BRIDGE_HTTP_FAILURE"
-            echo "- Result: BRIDGE_HTTP_FAILURE" >> "$GITHUB_STEP_SUMMARY"
             exit 1
           fi
 
-          if ! jq -e 'type == "object" and (.state | type == "string")' "$response_file" >/dev/null 2>&1; then
+          if ! jq -e 'type == "object" and (.state | type == "string")' "$response" >/dev/null 2>&1; then
             echo "WAVE8_BRIDGE_RESULT=BRIDGE_RESPONSE_INVALID"
-            echo "- Result: BRIDGE_RESPONSE_INVALID" >> "$GITHUB_STEP_SUMMARY"
             exit 1
           fi
 
-          state="$(jq -r '.state' "$response_file")"
+          state="$(jq -r '.state' "$response")"
           echo "WAVE8_BRIDGE_STATE=${state}"
-          echo "- State: \`${state}\`" >> "$GITHUB_STEP_SUMMARY"
 
           if [[ "$state" == "OAUTH_VERIFIED" ]]; then
-            profile="$(jq -r '.profile // "unknown"' "$response_file")"
-            adobe_http="$(jq -r '.httpStatus // "unknown"' "$response_file")"
-            expires="$(jq -r '.expiresIn // "unknown"' "$response_file")"
+            profile="$(jq -r '.profile // "unknown"' "$response")"
+            adobe_http="$(jq -r '.httpStatus // "unknown"' "$response")"
+            expires="$(jq -r '.expiresIn // "unknown"' "$response")"
             echo "WAVE8_OAUTH_VERIFIED profile=${profile} http=${adobe_http} expiresIn=${expires}"
-            echo "- Profile: \`${profile}\`" >> "$GITHUB_STEP_SUMMARY"
-            echo "- Adobe IMS HTTP: \`${adobe_http}\`" >> "$GITHUB_STEP_SUMMARY"
-            echo "- expires_in: \`${expires}\` seconds" >> "$GITHUB_STEP_SUMMARY"
-            echo "- Access token: OBTAINED_BUT_NOT_EXPOSED" >> "$GITHUB_STEP_SUMMARY"
             exit 0
           fi
 
           if [[ "$state" == "OAUTH_REJECTED" ]]; then
             echo "WAVE8_OAUTH_REJECTED"
-            jq -r '.attempts[]? | "WAVE8_ATTEMPT profile=\(.profile // "unknown") http=\(.httpStatus // "unknown") error=\(.providerError // "unknown")"' "$response_file"
-            echo "- Attempts (sanitized):" >> "$GITHUB_STEP_SUMMARY"
-            jq -r '.attempts[]? | "  - profile=\(.profile // "unknown") http=\(.httpStatus // "unknown") error=\(.providerError // "unknown")"' "$response_file" >> "$GITHUB_STEP_SUMMARY"
+            jq -r '.attempts[]? | "WAVE8_ATTEMPT profile=\(.profile // "unknown") http=\(.httpStatus // "unknown") error=\(.providerError // "unknown")"' "$response"
             exit 1
           fi
 
           echo "WAVE8_BRIDGE_RESULT=NON_VERIFIED_STATE"
-          echo "- Result: NON_VERIFIED_STATE" >> "$GITHUB_STEP_SUMMARY"
           exit 1
