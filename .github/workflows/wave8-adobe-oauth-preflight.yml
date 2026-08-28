@@ -18,39 +18,38 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
-      - name: Probe bridge with browser-like same-origin context
+      - name: Probe AppDeploy stage proxy directly
         shell: bash
         run: |
           set -euo pipefail
-          base='https://wave-8-adobe-oauth-bridge-x52n4k.v2.appdeploy.ai'
-          cookies="$(mktemp)"
+          host='wave-8-adobe-oauth-bridge-x52n4k.v2.appdeploy.ai'
+          proxy_ip='18.232.7.146'
           response="$(mktemp)"
           headers="$(mktemp)"
-          trap 'rm -f "$cookies" "$response" "$headers"' EXIT
+          trap 'rm -f "$response" "$headers"' EXIT
 
-          root_http="$({ curl --silent --show-error --location --cookie-jar "$cookies" --output /dev/null --write-out '%{http_code}' "$base/"; } || true)"
-          echo "WAVE8_ROOT_HTTP=${root_http}"
+          health_http="$({ curl --silent --show-error \
+            --resolve "$host:443:$proxy_ip" \
+            --output /dev/null \
+            --write-out '%{http_code}' \
+            "https://$host/api/_healthcheck"; } || true)"
+          echo "WAVE8_PROXY_HEALTH_HTTP=${health_http}"
 
           http_status="$({ curl --silent --show-error \
-            --cookie "$cookies" \
+            --resolve "$host:443:$proxy_ip" \
             --dump-header "$headers" \
             --output "$response" \
             --write-out '%{http_code}' \
             --request POST \
             --header 'Content-Type: application/json' \
-            --header "Origin: $base" \
-            --header "Referer: $base/" \
-            --header 'Sec-Fetch-Site: same-origin' \
-            --header 'Sec-Fetch-Mode: cors' \
-            --header 'Sec-Fetch-Dest: empty' \
             --data '{}' \
-            "$base/api/adobe/probe"; } || true)"
+            "https://$host/api/adobe/probe"; } || true)"
 
-          echo "WAVE8_BRIDGE_HTTP=${http_status}"
+          echo "WAVE8_PROXY_PROBE_HTTP=${http_status}"
           grep -iE '^(content-type|server|www-authenticate|x-appdeploy[^:]*):' "$headers" | sed 's/^/WAVE8_HEADER /' || true
 
           if [[ "$http_status" != "200" ]]; then
-            echo "WAVE8_BRIDGE_RESULT=BRIDGE_HTTP_FAILURE"
+            echo "WAVE8_BRIDGE_RESULT=STAGE_PROXY_HTTP_FAILURE"
             exit 1
           fi
 
@@ -67,6 +66,7 @@ jobs:
             adobe_http="$(jq -r '.httpStatus // "unknown"' "$response")"
             expires="$(jq -r '.expiresIn // "unknown"' "$response")"
             echo "WAVE8_OAUTH_VERIFIED profile=${profile} http=${adobe_http} expiresIn=${expires}"
+            echo "WAVE8_ACCESS_TOKEN=OBTAINED_BUT_NOT_EXPOSED"
             exit 0
           fi
 
