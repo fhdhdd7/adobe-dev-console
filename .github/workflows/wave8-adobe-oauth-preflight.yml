@@ -1,4 +1,4 @@
-name: Wave 8 Browser Transport Inspection
+name: Wave 8 Internal Transport Context
 
 on:
   push:
@@ -9,30 +9,41 @@ permissions:
   contents: read
 
 jobs:
-  inspect-browser-transport:
-    name: Inspect AppDeploy browser transport
+  inspect-internal-transport:
+    name: Inspect AppDeploy internal API client context
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
-      - name: Inspect public frontend assets for API transport
+      - name: Extract bounded transport context from live bundle
         shell: bash
         run: |
           set -euo pipefail
           base='https://wave-8-adobe-oauth-bridge-x52n4k.v2.appdeploy.ai'
           html="$(mktemp)"
-          trap 'rm -f "$html"' EXIT
+          js="$(mktemp)"
+          trap 'rm -f "$html" "$js"' EXIT
           curl --fail --silent --show-error --location "$base/" -o "$html"
-          echo 'WAVE8_ROOT=200'
-          echo 'WAVE8_SCRIPT_ASSETS_BEGIN'
-          grep -oE '<script[^>]+src="[^"]+"' "$html" | sed -E 's/.*src="([^"]+)"/\1/' | sort -u || true
-          echo 'WAVE8_SCRIPT_ASSETS_END'
-
-          mapfile -t assets < <(grep -oE '<script[^>]+src="[^"]+"' "$html" | sed -E 's/.*src="([^"]+)"/\1/' | sort -u)
-          for asset in "${assets[@]}"; do
-            if [[ "$asset" == http* ]]; then url="$asset"; else url="$base/${asset#./}"; fi
-            js="$(mktemp)"
-            curl --fail --silent --show-error --location "$url" -o "$js"
-            echo "WAVE8_ASSET=${asset}"
-            grep -oE 'https://[A-Za-z0-9._/-]*appdeploy[A-Za-z0-9._/?=&%-]*|/[A-Za-z0-9._-]*(__appdeploy|appdeploy|api)[A-Za-z0-9._/?=&%-]*|x-[Aa]pp[Dd]eploy-[A-Za-z0-9_-]+|__appdeploy[A-Za-z0-9_./?=&%-]*' "$js" | sort -u | head -n 80 || true
-            rm -f "$js"
-          done
+          asset="$(grep -oE '<script[^>]+src="\./assets/index-[^"]+\.js"' "$html" | sed -E 's/.*src="([^"]+)"/\1/' | head -n1)"
+          curl --fail --silent --show-error --location "$base/${asset#./}" -o "$js"
+          python3 - "$js" <<'PY'
+          import sys,re
+          p=sys.argv[1]
+          s=open(p,'r',encoding='utf-8').read()
+          needles=['https://api-v2.appdeploy.ai/app/wave-8-adobe-oauth-bridge-x52n4k','x-appdeploy-keys-prefix','app-auth']
+          for needle in needles:
+              print('WAVE8_CONTEXT_START',needle)
+              start=0
+              count=0
+              while True:
+                  i=s.find(needle,start)
+                  if i<0 or count>=4: break
+                  a=max(0,i-900); b=min(len(s),i+len(needle)+1200)
+                  chunk=s[a:b].replace('\n',' ')
+                  # redact any long bearer/JWT-like strings defensively
+                  chunk=re.sub(r'(?i)(bearer\s+)[A-Za-z0-9._~-]{20,}',r'\1[REDACTED]',chunk)
+                  chunk=re.sub(r'eyJ[A-Za-z0-9._~-]{30,}','[JWT_REDACTED]',chunk)
+                  print(chunk)
+                  print('WAVE8_CONTEXT_BREAK')
+                  start=i+len(needle); count+=1
+              print('WAVE8_CONTEXT_END',needle)
+          PY
