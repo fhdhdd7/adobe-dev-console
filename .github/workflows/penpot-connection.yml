@@ -1,0 +1,71 @@
+name: Penpot Connection Check
+
+on:
+  push:
+    branches:
+      - penpot-integration-bootstrap
+    paths:
+      - ".github/workflows/penpot-connection.yml"
+      - "integrations/penpot/**"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  verify-penpot-auth:
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    steps:
+      - name: Verify secret is configured
+        shell: bash
+        env:
+          PENPOT_ACCESS_TOKEN: ${{ secrets.PENPOT_ACCESS_TOKEN }}
+        run: |
+          set -euo pipefail
+          if [ -z "${PENPOT_ACCESS_TOKEN:-}" ]; then
+            echo "::error::PENPOT_ACCESS_TOKEN is not configured"
+            exit 1
+          fi
+
+      - name: Verify Penpot API authentication
+        shell: bash
+        env:
+          PENPOT_ACCESS_TOKEN: ${{ secrets.PENPOT_ACCESS_TOKEN }}
+        run: |
+          set -euo pipefail
+
+          endpoints=(
+            "https://design.penpot.app/api/main/methods/get-profile"
+            "https://design.penpot.app/api/rpc/command/get-profile"
+          )
+
+          success=0
+          for endpoint in "${endpoints[@]}"; do
+            response_file="$(mktemp)"
+            http_code="$(curl --silent --show-error --location \
+              --output "$response_file" \
+              --write-out "%{http_code}" \
+              --header "Authorization: Token ${PENPOT_ACCESS_TOKEN}" \
+              "$endpoint" || true)"
+
+            if [ "$http_code" = "200" ] && [ -s "$response_file" ]; then
+              success=1
+              rm -f "$response_file"
+              break
+            fi
+
+            rm -f "$response_file"
+
+            if [ "$http_code" = "401" ] || [ "$http_code" = "403" ]; then
+              echo "::error::Penpot rejected the access token (HTTP $http_code)"
+              exit 1
+            fi
+          done
+
+          if [ "$success" -ne 1 ]; then
+            echo "::error::Could not authenticate to Penpot through either supported profile endpoint"
+            exit 1
+          fi
+
+          echo "Penpot API authentication succeeded."
