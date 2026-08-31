@@ -1,4 +1,4 @@
-name: Penpot Connection Check
+name: Penpot Authenticated API Check
 
 on:
   push:
@@ -6,7 +6,6 @@ on:
       - penpot-integration-bootstrap
     paths:
       - ".github/workflows/penpot-connection.yml"
-      - "integrations/penpot/**"
   workflow_dispatch:
 
 permissions:
@@ -28,44 +27,48 @@ jobs:
             exit 1
           fi
 
-      - name: Verify Penpot API authentication
+      - name: Verify authenticated Penpot API access
         shell: bash
         env:
           PENPOT_ACCESS_TOKEN: ${{ secrets.PENPOT_ACCESS_TOKEN }}
         run: |
           set -euo pipefail
 
+          # get-profile is intentionally NOT used here: current Penpot exposes it
+          # with auth disabled and it can therefore produce a false-positive.
           endpoints=(
-            "https://design.penpot.app/api/main/methods/get-profile"
-            "https://design.penpot.app/api/rpc/command/get-profile"
+            "https://design.penpot.app/api/rpc/command/get-all-projects"
+            "https://design.penpot.app/api/main/methods/get-all-projects"
           )
 
-          success=0
+          saw_auth_rejection=0
           for endpoint in "${endpoints[@]}"; do
             response_file="$(mktemp)"
             http_code="$(curl --silent --show-error --location \
+              --request POST \
               --output "$response_file" \
               --write-out "%{http_code}" \
               --header "Authorization: Token ${PENPOT_ACCESS_TOKEN}" \
+              --header "Content-Type: application/json" \
+              --header "Accept: application/json" \
+              --data '{}' \
               "$endpoint" || true)"
 
             if [ "$http_code" = "200" ] && [ -s "$response_file" ]; then
-              success=1
               rm -f "$response_file"
-              break
+              echo "Penpot authenticated API access: PASS"
+              exit 0
             fi
 
             rm -f "$response_file"
-
             if [ "$http_code" = "401" ] || [ "$http_code" = "403" ]; then
-              echo "::error::Penpot rejected the access token (HTTP $http_code)"
-              exit 1
+              saw_auth_rejection=1
             fi
           done
 
-          if [ "$success" -ne 1 ]; then
-            echo "::error::Could not authenticate to Penpot through either supported profile endpoint"
-            exit 1
+          if [ "$saw_auth_rejection" -eq 1 ]; then
+            echo "::error::Penpot rejected this credential for authenticated API methods"
+          else
+            echo "::error::Authenticated Penpot API method did not return a usable response"
           fi
-
-          echo "Penpot API authentication succeeded."
+          exit 1
