@@ -1,0 +1,66 @@
+name: Penpot ChatGPT Bridge
+
+on:
+  push:
+    branches:
+      - penpot-integration-bootstrap
+    paths:
+      - ".github/workflows/penpot-chatgpt-bridge.yml"
+      - "integrations/penpot/mcp_bridge.py"
+      - "integrations/penpot/bridge_request.json"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: penpot-chatgpt-bridge
+  cancel-in-progress: false
+
+jobs:
+  execute-penpot-request:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Verify bridge credential is configured
+        shell: bash
+        env:
+          PENPOT_MCP_KEY: ${{ secrets.PENPOT_MCP_KEY }}
+          PENPOT_ACCESS_TOKEN: ${{ secrets.PENPOT_ACCESS_TOKEN }}
+        run: |
+          set -euo pipefail
+          if [ -z "${PENPOT_MCP_KEY:-}" ] && [ -z "${PENPOT_ACCESS_TOKEN:-}" ]; then
+            echo "::error::No Penpot MCP credential is configured"
+            exit 1
+          fi
+
+      - name: Execute Penpot MCP request
+        id: bridge
+        shell: bash
+        env:
+          PENPOT_MCP_KEY: ${{ secrets.PENPOT_MCP_KEY }}
+          PENPOT_ACCESS_TOKEN: ${{ secrets.PENPOT_ACCESS_TOKEN }}
+          PENPOT_BRIDGE_REQUEST: integrations/penpot/bridge_request.json
+        run: |
+          set -euo pipefail
+          python3 integrations/penpot/mcp_bridge.py | tee /tmp/penpot-bridge.log
+          grep -q '^PENPOT_BRIDGE=PASS ' /tmp/penpot-bridge.log
+
+      - name: Record sanitized bridge status
+        if: always()
+        shell: bash
+        run: |
+          {
+            echo "### ChatGPT → GitHub → Penpot MCP"
+            echo ""
+            if [ "${{ steps.bridge.outcome }}" = "success" ]; then
+              echo "Bridge execution: PASS"
+            else
+              echo "Bridge execution: FAIL"
+            fi
+            echo "Credential exposed: NO"
+            echo "MCP session identifier exposed: NO"
+          } >> "$GITHUB_STEP_SUMMARY"
