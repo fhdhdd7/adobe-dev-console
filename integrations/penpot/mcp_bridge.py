@@ -16,14 +16,14 @@ import sys
 import urllib.error
 import urllib.request
 from pathlib import Path
-from typing import Any
+from typing import Any, NoReturn
 
 ENDPOINT_BASE = "https://design.penpot.app/mcp/stream"
 REQUEST_PATH = Path(os.environ.get("PENPOT_BRIDGE_REQUEST", "integrations/penpot/bridge_request.json"))
 ALLOWED_TOOLS = {"execute_code", "high_level_overview", "penpot_api_info", "export_shape"}
 
 
-def fail(message: str) -> "NoReturn":
+def fail(message: str) -> NoReturn:
     print(f"PENPOT_BRIDGE=FAILED: {message}", file=sys.stderr)
     raise SystemExit(1)
 
@@ -69,6 +69,28 @@ def post(token: str, payload: dict[str, Any], session_id: str | None = None) -> 
         raise RuntimeError(f"HTTP {exc.code}") from None
     except urllib.error.URLError as exc:
         raise RuntimeError("network error") from exc
+
+
+def embedded_tool_error(rpc_result: Any) -> str | None:
+    if not isinstance(rpc_result, dict):
+        return None
+    if rpc_result.get("isError") is True:
+        return "tool-is-error"
+    content = rpc_result.get("content")
+    if not isinstance(content, list):
+        return None
+    for item in content:
+        if not isinstance(item, dict):
+            continue
+        text = item.get("text")
+        if not isinstance(text, str):
+            continue
+        lowered = text.lower()
+        if "no penpot instance connected" in lowered or "no plugin instance connected" in lowered:
+            return "no-live-instance"
+        if lowered.startswith("tool execution failed:"):
+            return "tool-execution-failed"
+    return None
 
 
 def main() -> int:
@@ -133,8 +155,11 @@ def main() -> int:
     if "error" in result:
         fail("MCP tool returned a JSON-RPC error")
     rpc_result = result.get("result")
-    if isinstance(rpc_result, dict) and rpc_result.get("isError") is True:
-        fail("Penpot tool execution returned isError=true")
+    embedded_error = embedded_tool_error(rpc_result)
+    if embedded_error == "no-live-instance":
+        fail("Penpot MCP transport is valid but no live Penpot instance is connected")
+    if embedded_error is not None:
+        fail("Penpot tool execution failed")
 
     canonical = json.dumps(rpc_result, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
     digest = hashlib.sha256(canonical.encode("utf-8")).hexdigest()
