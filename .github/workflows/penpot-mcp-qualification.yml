@@ -33,7 +33,7 @@ jobs:
             exit 1
           fi
 
-      - name: Qualify remote Penpot MCP transport
+      - name: Qualify remote Penpot MCP transport and live instance
         id: mcp
         shell: bash
         env:
@@ -107,7 +107,7 @@ jobs:
           echo "transport=pass" >> "$GITHUB_OUTPUT"
           echo "Penpot MCP transport and tools/list: PASS"
 
-          PROBE='{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"execute_code","arguments":{"code":"return {file: penpot.currentFile ? penpot.currentFile.name : null, page: penpot.currentPage ? penpot.currentPage.name : null};"}}}'
+          PROBE='{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"execute_code","arguments":{"code":"return {ok: true, hasFile: !!penpot.currentFile, hasPage: !!penpot.currentPage};"}}}'
           PROBE_CODE="$(curl --silent --show-error --location \
             --request POST "$ENDPOINT" \
             --header 'Content-Type: application/json' \
@@ -117,12 +117,12 @@ jobs:
             --output "$BODY" \
             --write-out '%{http_code}' || true)"
 
-          if [ "$PROBE_CODE" = "200" ] && ! grep -qiE 'No plugin instance connected|isError[^a-zA-Z0-9]*true' "$BODY"; then
+          if [ "$PROBE_CODE" = "200" ] && ! grep -qiE 'No Penpot instance connected|No plugin instance connected|Tool execution failed|isError[^a-zA-Z0-9]*true' "$BODY"; then
             echo "plugin=pass" >> "$GITHUB_OUTPUT"
             echo "Penpot live plugin execution: PASS"
           else
             echo "plugin=not-connected" >> "$GITHUB_OUTPUT"
-            echo "Penpot MCP is valid; live Penpot plugin is not currently connected."
+            echo "Penpot MCP transport is reachable; no live Penpot instance is connected for this token."
           fi
 
       - name: Record sanitized qualification result
