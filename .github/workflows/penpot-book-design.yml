@@ -1,0 +1,66 @@
+name: Penpot Book Design Bootstrap
+
+on:
+  push:
+    branches:
+      - penpot-integration-bootstrap
+    paths:
+      - ".github/workflows/penpot-book-design.yml"
+      - "integrations/penpot/book_design_bootstrap.py"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: penpot-book-design-bootstrap
+  cancel-in-progress: false
+
+jobs:
+  ensure-book-design-file:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Verify Penpot credential is configured
+        shell: bash
+        env:
+          PENPOT_ACCESS_TOKEN: ${{ secrets.PENPOT_ACCESS_TOKEN }}
+        run: |
+          set -euo pipefail
+          if [ -z "${PENPOT_ACCESS_TOKEN:-}" ]; then
+            echo "::error::PENPOT_ACCESS_TOKEN is not configured"
+            exit 1
+          fi
+
+      - name: Ensure dedicated Penpot book design file exists
+        shell: bash
+        env:
+          PENPOT_ACCESS_TOKEN: ${{ secrets.PENPOT_ACCESS_TOKEN }}
+          PENPOT_BOOK_FILE_NAME: "250 أقوال — نظام تصميم الكتاب"
+        run: |
+          set -euo pipefail
+          output="$(python3 integrations/penpot/book_design_bootstrap.py)"
+          case "$output" in
+            PENPOT_BOOK_DESIGN=EXISTS|PENPOT_BOOK_DESIGN=CREATED_AND_VERIFIED)
+              echo "$output"
+              ;;
+            *)
+              echo "::error::Unexpected Penpot bootstrap result"
+              exit 1
+              ;;
+          esac
+
+      - name: Record sanitized result
+        if: success()
+        shell: bash
+        run: |
+          {
+            echo "### Penpot book design bootstrap"
+            echo ""
+            echo "Authenticated GitHub-to-Penpot API path: PASS"
+            echo "Dedicated book design file: PRESENT"
+            echo "No Penpot token, project ID, file ID, or account data was written to logs or repository files."
+          } >> "$GITHUB_STEP_SUMMARY"
