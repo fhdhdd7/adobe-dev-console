@@ -1,0 +1,143 @@
+name: Penpot MCP Qualification
+
+on:
+  push:
+    branches:
+      - penpot-integration-bootstrap
+    paths:
+      - ".github/workflows/penpot-mcp-qualification.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  qualify-penpot-mcp:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Select existing Penpot credential
+        id: credential
+        shell: bash
+        env:
+          PENPOT_MCP_KEY: ${{ secrets.PENPOT_MCP_KEY }}
+          PENPOT_ACCESS_TOKEN: ${{ secrets.PENPOT_ACCESS_TOKEN }}
+        run: |
+          set -euo pipefail
+          if [ -n "${PENPOT_MCP_KEY:-}" ]; then
+            echo "kind=PENPOT_MCP_KEY" >> "$GITHUB_OUTPUT"
+          elif [ -n "${PENPOT_ACCESS_TOKEN:-}" ]; then
+            echo "kind=PENPOT_ACCESS_TOKEN" >> "$GITHUB_OUTPUT"
+          else
+            echo "::error::No Penpot credential is configured"
+            exit 1
+          fi
+
+      - name: Qualify remote Penpot MCP transport
+        id: mcp
+        shell: bash
+        env:
+          PENPOT_MCP_KEY: ${{ secrets.PENPOT_MCP_KEY }}
+          PENPOT_ACCESS_TOKEN: ${{ secrets.PENPOT_ACCESS_TOKEN }}
+        run: |
+          set -euo pipefail
+
+          if [ -n "${PENPOT_MCP_KEY:-}" ]; then
+            TOKEN="$PENPOT_MCP_KEY"
+          else
+            TOKEN="$PENPOT_ACCESS_TOKEN"
+          fi
+
+          ENDPOINT="https://design.penpot.app/mcp/stream?userToken=${TOKEN}"
+          HDR="$(mktemp)"
+          BODY="$(mktemp)"
+          trap 'rm -f "$HDR" "$BODY"' EXIT
+
+          INIT='{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-03-26","capabilities":{},"clientInfo":{"name":"chatgpt-github-penpot-bridge","version":"1.0.0"}}}'
+
+          CODE="$(curl --silent --show-error --location \
+            --request POST "$ENDPOINT" \
+            --header 'Content-Type: application/json' \
+            --header 'Accept: application/json, text/event-stream' \
+            --data "$INIT" \
+            --dump-header "$HDR" \
+            --output "$BODY" \
+            --write-out '%{http_code}' || true)"
+
+          if [ "$CODE" != "200" ]; then
+            echo "::error::Penpot MCP initialize failed (HTTP $CODE)"
+            exit 1
+          fi
+
+          SESSION_ID="$(awk 'BEGIN{IGNORECASE=1} /^mcp-session-id:/ {gsub("\r", "", $2); print $2; exit}' "$HDR")"
+          if [ -z "$SESSION_ID" ]; then
+            echo "::error::Penpot MCP did not return mcp-session-id"
+            exit 1
+          fi
+
+          NOTIFY='{"jsonrpc":"2.0","method":"notifications/initialized"}'
+          curl --silent --show-error --location \
+            --request POST "$ENDPOINT" \
+            --header 'Content-Type: application/json' \
+            --header 'Accept: application/json, text/event-stream' \
+            --header "mcp-session-id: $SESSION_ID" \
+            --data "$NOTIFY" \
+            --output /dev/null
+
+          TOOLS='{"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}}'
+          TOOLS_CODE="$(curl --silent --show-error --location \
+            --request POST "$ENDPOINT" \
+            --header 'Content-Type: application/json' \
+            --header 'Accept: application/json, text/event-stream' \
+            --header "mcp-session-id: $SESSION_ID" \
+            --data "$TOOLS" \
+            --output "$BODY" \
+            --write-out '%{http_code}' || true)"
+
+          if [ "$TOOLS_CODE" != "200" ]; then
+            echo "::error::Penpot MCP tools/list failed (HTTP $TOOLS_CODE)"
+            exit 1
+          fi
+
+          if ! grep -q 'execute_code' "$BODY"; then
+            echo "::error::Penpot MCP tools/list did not expose execute_code"
+            exit 1
+          fi
+
+          echo "transport=pass" >> "$GITHUB_OUTPUT"
+          echo "Penpot MCP transport and tools/list: PASS"
+
+          PROBE='{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"execute_code","arguments":{"code":"return {file: penpot.currentFile ? penpot.currentFile.name : null, page: penpot.currentPage ? penpot.currentPage.name : null};"}}}'
+          PROBE_CODE="$(curl --silent --show-error --location \
+            --request POST "$ENDPOINT" \
+            --header 'Content-Type: application/json' \
+            --header 'Accept: application/json, text/event-stream' \
+            --header "mcp-session-id: $SESSION_ID" \
+            --data "$PROBE" \
+            --output "$BODY" \
+            --write-out '%{http_code}' || true)"
+
+          if [ "$PROBE_CODE" = "200" ] && ! grep -qiE 'No plugin instance connected|isError[^a-zA-Z0-9]*true' "$BODY"; then
+            echo "plugin=pass" >> "$GITHUB_OUTPUT"
+            echo "Penpot live plugin execution: PASS"
+          else
+            echo "plugin=not-connected" >> "$GITHUB_OUTPUT"
+            echo "Penpot MCP is valid; live Penpot plugin is not currently connected."
+          fi
+
+      - name: Record sanitized qualification result
+        if: always()
+        shell: bash
+        env:
+          KIND: ${{ steps.credential.outputs.kind }}
+          TRANSPORT: ${{ steps.mcp.outputs.transport }}
+          PLUGIN: ${{ steps.mcp.outputs.plugin }}
+        run: |
+          {
+            echo "### Penpot MCP qualification"
+            echo ""
+            echo "Credential source: ${KIND:-unresolved}"
+            echo "Remote MCP transport: ${TRANSPORT:-failed}"
+            echo "Live Penpot plugin: ${PLUGIN:-not-tested}"
+            echo "Secrets/identifiers logged: NO"
+          } >> "$GITHUB_STEP_SUMMARY"
