@@ -13,6 +13,7 @@ import hashlib
 import json
 import os
 import sys
+import time
 import urllib.error
 import urllib.request
 from pathlib import Path
@@ -147,17 +148,29 @@ def main() -> int:
     if tool not in exposed:
         fail("requested tool is not exposed by Penpot MCP")
 
-    result, _ = post(
-        token,
-        {"jsonrpc": "2.0", "id": 3, "method": "tools/call", "params": {"name": tool, "arguments": arguments}},
-        session_id,
-    )
-    if "error" in result:
-        fail("MCP tool returned a JSON-RPC error")
-    rpc_result = result.get("result")
-    embedded_error = embedded_tool_error(rpc_result)
-    if embedded_error == "no-live-instance":
-        fail("Penpot MCP transport is valid but no live Penpot instance is connected")
+    wait_seconds = max(0, min(int(os.environ.get("PENPOT_WAIT_SECONDS", "240")), 600))
+    poll_seconds = max(2, min(int(os.environ.get("PENPOT_POLL_SECONDS", "5")), 30))
+    deadline = time.monotonic() + wait_seconds
+    attempt = 0
+    while True:
+        attempt += 1
+        result, _ = post(
+            token,
+            {"jsonrpc": "2.0", "id": 3, "method": "tools/call", "params": {"name": tool, "arguments": arguments}},
+            session_id,
+        )
+        if "error" in result:
+            fail("MCP tool returned a JSON-RPC error")
+        rpc_result = result.get("result")
+        embedded_error = embedded_tool_error(rpc_result)
+        if embedded_error != "no-live-instance":
+            break
+        remaining = int(deadline - time.monotonic())
+        if remaining <= 0:
+            fail("Penpot MCP transport is valid but no live Penpot instance connected before timeout")
+        print(f"PENPOT_BRIDGE=WAITING attempt={attempt} remaining_seconds={remaining}", flush=True)
+        time.sleep(min(poll_seconds, remaining))
+
     if embedded_error is not None:
         fail("Penpot tool execution failed")
 
