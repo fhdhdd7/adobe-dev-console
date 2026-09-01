@@ -11,7 +11,7 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: read
+  contents: write
 
 concurrency:
   group: penpot-chatgpt-bridge
@@ -64,3 +64,26 @@ jobs:
             echo "Credential exposed: NO"
             echo "MCP session identifier exposed: NO"
           } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Persist sanitized bridge status
+        if: always()
+        shell: bash
+        env:
+          BRIDGE_OUTCOME: ${{ steps.bridge.outcome }}
+        run: |
+          set -euo pipefail
+          mkdir -p integrations/penpot
+          if [ "$BRIDGE_OUTCOME" = "success" ]; then
+            STATUS="PASS"
+          else
+            STATUS="FAIL"
+          fi
+          printf '{"status":"%s","request_file":"integrations/penpot/bridge_request.json","credential_exposed":false,"session_exposed":false}\n' "$STATUS" > integrations/penpot/last_status.json
+          git config user.name "penpot-bridge-bot"
+          git config user.email "penpot-bridge-bot@users.noreply.github.com"
+          git add integrations/penpot/last_status.json
+          if git diff --cached --quiet; then
+            exit 0
+          fi
+          git commit -m "Record sanitized Penpot bridge status: $STATUS"
+          git push
