@@ -1,9 +1,7 @@
 {
   "version": 1,
-  "request_id": "bridge-self-test-2026-09-01",
-  "tool": "execute_code",
-  "arguments": {
-    "code": "return {ok: true, hasFile: !!penpot.currentFile, hasPage: !!penpot.currentPage};"
-  },
-  "output_policy": "safe_json"
+  "request_id": "qualification-after-mcp-key-refresh-2026-09-01-0801z",
+  "tool": "high_level_overview",
+  "arguments": {},
+  "output_policy": "status_only"
 }
